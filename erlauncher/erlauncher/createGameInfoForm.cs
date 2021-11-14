@@ -13,6 +13,7 @@ namespace erlauncher
     public partial class createGameInfoForm : Form
     {
         public List<GameInfo> newGameList { set; get; } = new List<GameInfo>();
+        public bool dialogResult = false;
         public createGameInfoForm()
         {
             InitializeComponent();
@@ -50,7 +51,50 @@ namespace erlauncher
 
         private void button2_Click(object sender, EventArgs e)
         {
+            dialogResult = true;
+            var ngl = new List<GameInfo>();
+            foreach (ListViewItem item in listView1.CheckedItems)
+            {
+                ngl.Add(newGameList.Find(x => x.Path == item.SubItems[1].Text));
+            }
+            newGameList = ngl;
             this.Close();
+        }
+
+        private void listView1_mouseClick(object sender, MouseEventArgs e)
+        {
+            if (listView1.SelectedItems.Count > 0)
+            {
+                listView1.SelectedItems[0].BeginEdit();
+            }
+        }
+
+        private void listView1_selectedIndexChanged(object sender, EventArgs e)
+        {
+            if (listView1.SelectedItems.Count > 0)
+            {
+                listView1.SelectedItems[0].Checked = !listView1.SelectedItems[0].Checked;
+            }
+        }
+
+        private void listView1_beforeLabelEdit(object sender, LabelEditEventArgs e)
+        {
+            listView1.FullRowSelect = false;
+        }
+
+        private void listView1_AfterLabelEdit(object sender, LabelEditEventArgs e)
+        {
+            listView1.FullRowSelect = true;
+            if (e.Label != null)
+            {
+                var path = listView1.SelectedItems[0].SubItems[1].Text;
+                newGameList.Find(x => x.Path == path).displayName = e.Label;
+            }
+        }
+
+        private void listView1_ItemChecked(object sender, ItemCheckedEventArgs e)
+        {
+            button2.Enabled = (listView1.CheckedItems.Count > 0);
         }
     }
 }

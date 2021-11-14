@@ -11,6 +11,7 @@ using System.Diagnostics;
 using System.Xml.Serialization;
 using System.Configuration;
 using System.IO;
+using System.Runtime.InteropServices;
 
 namespace erlauncher
 {
@@ -20,7 +21,14 @@ namespace erlauncher
         public List<FolderInfo> FolderList { set; get; } = new List<FolderInfo>();
         private string ListName;
         private string BaseFolderName;
+        private string ScreenShotsDir;
         private float defaultFontSize;
+        private float defaultPathFontSize;
+        private Process gameProcess;
+        private GameInfo playingGame;
+        private List<ScreenShotInfo> thumbList = new List<ScreenShotInfo>();
+        private KeyboardHook keyboardHook = new KeyboardHook();
+        private TweetManager tweetManager = new TweetManager();
         public Form1()
         {
             InitializeComponent();
@@ -29,7 +37,9 @@ namespace erlauncher
         {
             ListName = ConfigurationManager.AppSettings["ListName"];
             BaseFolderName = ConfigurationManager.AppSettings["BaseFolderName"];
+            ScreenShotsDir = ConfigurationManager.AppSettings["ScreenShotDir"];
             defaultFontSize = Title.Font.SizeInPoints;
+            defaultPathFontSize = selectedGamePathLabel.Font.SizeInPoints;
 
             LoadFolderList();
             Load_AllGame();
@@ -44,9 +54,19 @@ namespace erlauncher
             }
 
             groupTree.SelectedNode = groupTree.Nodes[0];
+
+            if (!Directory.Exists(ScreenShotsDir))
+            {
+                Directory.CreateDirectory(ScreenShotsDir);
+            }
+
+            keyboardHook.KeyDownEvent += screenShotEvent;
+            keyboardHook.Hook();
+
         }
         private void Form1_Close(object sender, FormClosingEventArgs e)
         {
+            keyboardHook.UnHook();
             SaveFolderList();
         }
 
@@ -54,7 +74,15 @@ namespace erlauncher
         {
             try
             {
-                Process.Start((string)playButton.Tag);
+                if (gameProcess != null && !gameProcess.HasExited)
+                {
+                    MessageBox.Show($"起動中のゲームを終了してから起動してください。", "エラー", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+                else
+                {
+                    gameProcess = Process.Start((string)playButton.Tag);
+                    playingGame = GameList.Find(x => x.Path == (string)playButton.Tag);
+                }
             }
             catch (Exception err)
             {
@@ -259,17 +287,19 @@ namespace erlauncher
 
             var cgiForm = new createGameInfoForm(newGameList);
             cgiForm.ShowDialog();
-
-            int idx = GameList.Count;
-            foreach(var g in cgiForm.newGameList)
+            if (cgiForm.dialogResult)
             {
-                allIconList.Images.Add(Icon.ExtractAssociatedIcon(g.Path));
-                g.id = idx++;
-                GameList.Add(g);
+                int idx = GameList.Count;
+                foreach (var g in cgiForm.newGameList)
+                {
+                    allIconList.Images.Add(Icon.ExtractAssociatedIcon(g.Path));
+                    g.id = idx++;
+                    GameList.Add(g);
+                }
+                FolderList.Find(x => x.Name == BaseFolderName).GameList = GameList;
+                ResetListView(BaseFolderName);
+                groupTree.SelectedNode = groupTree.Nodes[0];
             }
-            FolderList.Find(x => x.Name == BaseFolderName).GameList = GameList;
-            ResetListView(BaseFolderName);
-            groupTree.SelectedNode = groupTree.Nodes[0];
         }
 
         private async void MinusButton_Click(object sender, EventArgs e)
@@ -459,10 +489,55 @@ namespace erlauncher
                 Title.Visible = true;
                 Title.Text = listView1.SelectedItems[0].Text;
                 pictureBox1.Visible = true;
+                selectedGamePathLabel.Visible = true;
+                selectedGamePathLabel.Text = (string)listView1.SelectedItems[0].Tag;
+                screenShotPanel.Visible = true;
 
+                var largeImagePath = GameList.Find(x => x.id == listView1.SelectedItems[0].ImageIndex).imagepath;
+                var scDir = $"{ScreenShotsDir}\\{listView1.SelectedItems[0].Text}";
+                thumbList.Clear();
+                if (Directory.Exists(scDir))
+                {
+                    LoadThumbnail(scDir);
+                    if (thumbList.Count > 0)
+                    {
+                        if (largeImagePath == null || !File.Exists(largeImagePath))
+                        {
+                            selectedThumbIndex = 0;
+                            largeImagePath = thumbList[selectedThumbIndex].FilePath;
+                        }
+                        else
+                        {
+                            selectedThumbIndex = thumbList.FindIndex(x => x.FilePath == largeImagePath);
+                            if (selectedThumbIndex > 0)
+                            {
+                                largeImagePath = thumbList[selectedThumbIndex].FilePath;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        screenShotPanel.Visible = false;
+                    }
+                }
+                else
+                {
+                    screenShotPanel.Visible = false;
+                }
+
+                if (thumbList.Count > 0)
+                {
+                    label2.Visible = false;
+                }
+                else
+                {
+                    largeImagePath = null;
+                    label2.Visible = true;
+                }
+                
                 var canvas = new Bitmap(pictureBox1.Width, pictureBox1.Height);
                 var g = Graphics.FromImage(canvas);
-                var largeImagePath = GameList.Find(x => x.id == listView1.SelectedItems[0].ImageIndex).imagepath;
+                
                 var src = (largeImagePath == null) ?
                     listView1.SmallImageList.Images[listView1.SelectedItems[0].ImageIndex]
                     : Image.FromFile(largeImagePath);
@@ -477,11 +552,22 @@ namespace erlauncher
                 float width = defaultFontSize * Title.Text.Length;
                 if (width > limWidth)
                 {
-                    Title.Font = new Font(label1.Font.FontFamily, defaultFontSize * limWidth / width);
+                    Title.Font = new Font(Title.Font.FontFamily, defaultFontSize * limWidth / width);
                 }
                 else
                 {
                     Title.Font = new Font(label1.Font.FontFamily, defaultFontSize);
+                }
+
+                limWidth = 450;
+                width = defaultPathFontSize * selectedGamePathLabel.Text.Length;
+                if (width > limWidth)
+                {
+                    selectedGamePathLabel.Font = new Font(selectedGamePathLabel.Font.FontFamily, defaultPathFontSize * limWidth / width);
+                }
+                else
+                {
+                    selectedGamePathLabel.Font = new Font(selectedGamePathLabel.Font.FontFamily, defaultPathFontSize);
                 }
             }
         }
@@ -490,12 +576,26 @@ namespace erlauncher
         {
             if (openImageFileDialog.ShowDialog() == DialogResult.OK)
             {
-                GameList.Find(x => x.id == listView1.SelectedItems[0].ImageIndex).imagepath= openImageFileDialog.FileName;                
+                GameList.Find(x => x.id == listView1.SelectedItems[0].ImageIndex).imagepath= openImageFileDialog.FileName;
+                var canvas = new Bitmap(pictureBox1.Width, pictureBox1.Height);
+                var g = Graphics.FromImage(canvas);
+                var largeImagePath = GameList.Find(x => x.id == listView1.SelectedItems[0].ImageIndex).imagepath;
+                var src = Image.FromFile(largeImagePath);
+                var f = Math.Min((float)canvas.Width / src.Width, (float)canvas.Height / src.Height);
+                var sx = Math.Abs((canvas.Width - src.Width * f) / 2.0f);
+                var sy = Math.Abs((canvas.Height - src.Height * f) / 2.0f);
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                g.DrawImage(src, sx, sy, src.Width * f, src.Height * f);
+                pictureBox1.Image = canvas;
             }
+        }
 
+        private void setLargeImage(string path)
+        {
+            GameList.Find(x => x.Path == selectedGamePathLabel.Text).imagepath = path;
             var canvas = new Bitmap(pictureBox1.Width, pictureBox1.Height);
             var g = Graphics.FromImage(canvas);
-            var largeImagePath = GameList.Find(x => x.id == listView1.SelectedItems[0].ImageIndex).imagepath;
+            var largeImagePath = GameList.Find(x => x.Path == selectedGamePathLabel.Text).imagepath;
             var src = Image.FromFile(largeImagePath);
             var f = Math.Min((float)canvas.Width / src.Width, (float)canvas.Height / src.Height);
             var sx = Math.Abs((canvas.Width - src.Width * f) / 2.0f);
@@ -503,6 +603,326 @@ namespace erlauncher
             g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
             g.DrawImage(src, sx, sy, src.Width * f, src.Height * f);
             pictureBox1.Image = canvas;
+        }
+
+        private void selectedGamePath_DoubleClick(object sender, EventArgs e)
+        {
+            openFileDialog1.FileName = Path.GetFileName(((Label)sender).Text);
+            openFileDialog1.InitialDirectory = Path.GetDirectoryName(((Label)sender).Text);
+            if (openFileDialog1.ShowDialog() == DialogResult.OK)
+            {
+                var path = openFileDialog1.FileName;
+                var selectedGameInfo = GameList.Find(x => x.displayName == Title.Text);
+                selectedGameInfo.Path = path;
+                selectedGamePathLabel.Text = path;
+
+                allIconList.Images[selectedGameInfo.id] = (Image)(new Bitmap(Icon.ExtractAssociatedIcon(path).ToBitmap(), allIconList.ImageSize));
+                if (selectedGameInfo.imagepath == null)
+                {
+                    var canvas = new Bitmap(pictureBox1.Width, pictureBox1.Height);
+                    var g = Graphics.FromImage(canvas);
+                    var src = listView1.SmallImageList.Images[selectedGameInfo.id];
+                    var f = Math.Min((float)canvas.Width / src.Width, (float)canvas.Height / src.Height);
+                    var sx = Math.Abs((canvas.Width - src.Width * f) / 2.0f);
+                    var sy = Math.Abs((canvas.Height - src.Height * f) / 2.0f);
+                    g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                    g.DrawImage(src, sx, sy, src.Width * f, src.Height * f);
+                    pictureBox1.Image = canvas;
+                }
+
+                var limWidth = 450;
+                var width = defaultPathFontSize * selectedGamePathLabel.Text.Length;
+                if (width > limWidth)
+                {
+                    selectedGamePathLabel.Font = new Font(selectedGamePathLabel.Font.FontFamily, defaultPathFontSize * limWidth / width);
+                }
+                else
+                {
+                    selectedGamePathLabel.Font = new Font(selectedGamePathLabel.Font.FontFamily, defaultPathFontSize);
+                }
+                
+                ResetListView(groupTree.SelectedNode.Name);
+            }
+
+        }
+
+        private struct RECT
+        {
+            public int Left;
+            public int Top;
+            public int Right;
+            public int Bottom;
+            public Size Size
+            {
+                get { return new Size(Right - Left, Bottom - Top); }
+            }
+        }
+
+        [DllImport("User32.dll")]
+        private static extern bool PrintWindow(IntPtr hwnd, IntPtr hDC, uint nFlags);
+        [DllImport("User32.dll")]
+        private static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
+        private void screenShotEvent(object sender, KeyEventArg e)
+        {
+            //F12:0x7b
+            //PrintScreen:0x2c
+            if (e.KeyCode == 0x2c && gameProcess != null && !gameProcess.HasExited)
+            {
+                try
+                {
+                    var scDir = $"{ScreenShotsDir}\\{playingGame.displayName}";
+                    if (!Directory.Exists(scDir))
+                    {
+                        Directory.CreateDirectory(scDir);
+                    }
+
+                    var handle = gameProcess.MainWindowHandle;
+                    var rec = new RECT();
+                    GetClientRect(handle, out rec);
+
+                    var img = new Bitmap(rec.Right - rec.Left, rec.Bottom - rec.Top);
+                    using (var g = Graphics.FromImage(img))
+                    {
+                        IntPtr dc = g.GetHdc();
+                        PrintWindow(handle, dc, 1);
+                        g.ReleaseHdc(dc);
+                        g.Dispose();
+                    }
+
+                    var date = DateTime.Now.ToString("yyyyMMddHHmmss");
+                    img.Save($"{scDir}\\{date}.png");
+                    thumbList.Clear();
+                    screenShotPanel.Visible = true;
+                    LoadThumbnail(scDir);
+                    pictureBox2.Invalidate();
+                }catch(Exception err)
+                {
+                    MessageBox.Show($"スクリーンショットの取得に失敗しました。\n{err.Message}","エラー", MessageBoxButtons.OK,MessageBoxIcon.Error);
+                }
+            }
+        }
+        //const int ThumbWidth = 150;
+        const int ThumbHeight = 70;
+        int ItemWidth;
+        const int LestMargin = 12;
+
+        int selectedThumbIndex = -1;
+
+        private void LoadThumbnail(string targertFolder)
+        {
+            var files = Directory.GetFiles(targertFolder, "*.png");
+            Array.Reverse(files);
+            foreach (string path in files)
+            {
+                var size = Image.FromFile(path).Size;
+                double f = (double)ThumbHeight / size.Height;
+                int ThumbWidth = (int)Math.Round(f * size.Width);
+                ItemWidth = ThumbWidth + 24;
+                thumbList.Add(new ScreenShotInfo(path, ThumbWidth, ThumbHeight));
+                if (!hScrollBar1.Enabled)
+                {
+                    pictureBox2.Invalidate();
+                }
+
+                if (ItemWidth * thumbList.Count <= pictureBox2.Width)
+                {
+                    hScrollBar1.Value = 0;
+                    hScrollBar1.Enabled = false;
+                }
+                else
+                {
+                    int largeChange = pictureBox2.Width;
+                    hScrollBar1.Maximum = ItemWidth * thumbList.Count - pictureBox2.Width + largeChange;
+                    hScrollBar1.LargeChange = largeChange;
+                    hScrollBar1.SmallChange = largeChange / 4;
+                    hScrollBar1.Enabled = true;
+                }
+            }
+        }
+
+        private void pictureBox2_Paint(object sender, PaintEventArgs e)
+        {
+            if (thumbList.Count > 0)
+            {
+                int itemIndex = hScrollBar1.Value / ItemWidth;
+
+                int y = (pictureBox2.ClientSize.Height - ThumbHeight) / 2;
+                for (int x = -(hScrollBar1.Value % ItemWidth); x < pictureBox2.Width && itemIndex < thumbList.Count; x += ItemWidth)
+                {
+                    Brush br = (itemIndex == selectedThumbIndex) ? SystemBrushes.Highlight : new SolidBrush(Color.FromArgb(32, 32, 38));
+                    e.Graphics.FillRectangle(br, x, 0, ItemWidth, pictureBox2.ClientSize.Height);
+
+                    e.Graphics.DrawImage(thumbList[itemIndex].Thumbnail, x+LestMargin, y);
+
+                    ++itemIndex;
+                }
+            }
+        }
+
+        private void pictureBox2_MouseDown(object sender, MouseEventArgs e)
+        {
+            int itemIndex = (e.Location.X + hScrollBar1.Value) / ItemWidth;
+            if (itemIndex < thumbList.Count)
+            {
+                selectedThumbIndex = itemIndex;
+                pictureBox2.Invalidate();
+                setLargeImage(thumbList[selectedThumbIndex].FilePath);
+            }
+        }
+
+        private void hScrollBar1_Scroll(object sender, ScrollEventArgs e)
+        {
+            pictureBox2.Invalidate();
+        }
+
+        private void pictureBox2_PreviewKeyDown(object sender, PreviewKeyDownEventArgs e)
+        {
+            //delete:0x2e
+            MessageBox.Show("presse");
+            MessageBox.Show(e.KeyCode.ToString());
+        }
+
+        private void toolStripMenuItem2_Click(object sender, EventArgs e)
+        {
+            
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            File.Delete(thumbList[selectedThumbIndex].FilePath);
+            thumbList.Clear();
+            var scDir = $"{ScreenShotsDir}\\{Title.Text}";
+            LoadThumbnail(scDir);
+            if (thumbList.Count > 0)
+            {
+                if (selectedThumbIndex > 0)
+                    --selectedThumbIndex;
+                setLargeImage(thumbList[selectedThumbIndex].FilePath);
+            }
+            else
+            {
+                screenShotPanel.Visible = false;
+                label2.Visible = true;
+            }
+
+            
+        }
+
+        private void toolStripMenuItem3_Click(object sender, EventArgs e)
+        {
+            var scDir = $"{ScreenShotsDir}\\{Title.Text}";
+            if (Directory.Exists(scDir))
+            {
+                Process.Start("EXPLORER.EXE", scDir);
+            }
+        }
+
+        private void ToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            var imagepath = GameList.Find(x => x.Path == selectedGamePathLabel.Text).imagepath;
+            var tweetForm = new TweetForm(tweetManager, imagepath);
+            tweetForm.ShowDialog();
+        }
+
+        private void GameNameChangeItem_Click(object sender, EventArgs e)
+        {
+            if (listView1.SelectedItems.Count > 0)
+            {
+                listView1.SelectedItems[0].BeginEdit();
+            }
+        }
+
+        private void GameRemoveItem_Click(object sender, EventArgs e)
+        {
+            if (groupTree.SelectedNode.Name == BaseFolderName)
+            {
+                var result = MessageBox.Show("選択されたゲームをランチャーから削除しますか？", "確認", MessageBoxButtons.YesNo, MessageBoxIcon.None, MessageBoxDefaultButton.Button2);
+                if (result == DialogResult.Yes)
+                {
+                    foreach (ListViewItem lvi in listView1.SelectedItems)
+                    {
+                        removeGame(lvi.ImageIndex);
+                    }
+
+                    ResetGroupTree();
+                }
+            }
+            else
+            {
+                var targetFolderName = groupTree.SelectedNode.Name;
+                var result = MessageBox.Show($"選択されたゲームを{targetFolderName}から削除しますか？", "確認", MessageBoxButtons.YesNo, MessageBoxIcon.None, MessageBoxDefaultButton.Button2);
+                if (result == DialogResult.Yes)
+                {
+                    var targetFolder = FolderList.Find(x => x.Name == targetFolderName);
+                    foreach (ListViewItem lvi in listView1.SelectedItems)
+                    {
+                        removeGame(lvi.ImageIndex, targetFolder);
+                    }
+
+                    ResetGroupTree(targetFolderName);
+                }
+            }
+        }
+
+        private void GameListContextMenu_Opening(object sender, CancelEventArgs e)
+        {
+            if (listView1.SelectedItems.Count > 0)
+            {
+                GameNameChangeItem.Enabled = true;
+                GameInfoChangeItem.Enabled = true;
+                GameRemoveItem.Enabled = true;
+            }
+            else
+            {
+                GameNameChangeItem.Enabled = false;
+                GameInfoChangeItem.Enabled = false;
+                GameRemoveItem.Enabled = false;
+            }
+        }
+
+        private void listView1_AfterLabelEdit(object sender, LabelEditEventArgs e)
+        {
+            GameList.Find(x => x.id == listView1.SelectedItems[0].ImageIndex).displayName = e.Label;
+            Title.Text = e.Label;
+        }
+
+        private void GameInfoChangeItem_Click(object sender, EventArgs e)
+        {
+            var nowPath = GameList.Find(x => x.id == listView1.SelectedItems[0].ImageIndex).Path;
+            openFileDialog1.FileName = Path.GetFileName(nowPath);
+            openFileDialog1.InitialDirectory = Path.GetDirectoryName(nowPath);
+            if (openFileDialog1.ShowDialog() == DialogResult.OK)
+            {
+                var path = openFileDialog1.FileName;
+                var selectedGameInfo = GameList.Find(x => x.displayName == Title.Text);
+                selectedGameInfo.Path = path;
+                selectedGamePathLabel.Text = path;
+
+                allIconList.Images[selectedGameInfo.id] = (Image)(new Bitmap(Icon.ExtractAssociatedIcon(path).ToBitmap(), allIconList.ImageSize));
+                if (selectedGameInfo.imagepath == null)
+                {
+                    var canvas = new Bitmap(pictureBox1.Width, pictureBox1.Height);
+                    var g = Graphics.FromImage(canvas);
+                    var src = listView1.SmallImageList.Images[selectedGameInfo.id];
+                    var f = Math.Min((float)canvas.Width / src.Width, (float)canvas.Height / src.Height);
+                    var sx = Math.Abs((canvas.Width - src.Width * f) / 2.0f);
+                    var sy = Math.Abs((canvas.Height - src.Height * f) / 2.0f);
+                    g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                    g.DrawImage(src, sx, sy, src.Width * f, src.Height * f);
+                    pictureBox1.Image = canvas;
+                }
+
+                var limWidth = 450;
+                var width = defaultPathFontSize * selectedGamePathLabel.Text.Length;
+                if (width > limWidth)
+                {
+                    selectedGamePathLabel.Font = new Font(selectedGamePathLabel.Font.FontFamily, defaultPathFontSize * limWidth / width);
+                }
+                else
+                {
+                    selectedGamePathLabel.Font = new Font(selectedGamePathLabel.Font.FontFamily, defaultPathFontSize);
+                }
+
+                ResetListView(groupTree.SelectedNode.Name);
+            }
         }
     }
 }
